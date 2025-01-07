@@ -346,10 +346,12 @@ public class DepotGUI extends JFrame {
             String parcelId = parcelIdField.getText().trim();
             
             if (!parcelId.isEmpty()) {
+                // Create a temporary reader with the input value
+                depotSystem.inputReader = new Scanner(parcelId);
                 depotSystem.removePackage();
                 dialog.dispose();
                 updateStatus();
-                mainDisplayArea.append("Parcel removed successfully: " + parcelId + "\n");
+                mainDisplayArea.append("Removed parcel: " + parcelId + "\n");
             } else {
                 showError("Please enter a Parcel ID");
             }
