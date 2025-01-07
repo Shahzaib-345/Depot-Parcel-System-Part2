@@ -34,14 +34,15 @@ public class DepotSystem {
                 String[] fields = record.split(",");
                 if (fields.length >= 4) {
                     String identifier = fields[0].trim();
-                    float itemMass = Float.parseFloat(fields[1].trim());
-                    String itemSize = fields[2].trim() + "x" + fields[3].trim() + "x" + fields[4].trim();
-                    Parcel newItem = new Parcel(identifier, itemMass, itemSize);
-                    packageCollection.addPackage(newItem);
+                    float mass = Float.parseFloat(fields[1].trim());
+                    String dimensions = fields[2].trim() + "x" + fields[3].trim() + "x" + fields[4].trim();
+                    Parcel newPackage = new Parcel(identifier, mass, dimensions);
+                    packageCollection.addPackage(newPackage);
                 }
             }
         } catch (IOException ex) {
-            System.err.println("Inventory loading failed: " + ex.getMessage());
+            System.err.println("Error loading inventory data: " + ex.getMessage());
+            logger.logEvent("Failed to initialize package list: " + ex.getMessage());
         }
     }
 
@@ -49,7 +50,7 @@ public class DepotSystem {
         try (BufferedReader fileReader = new BufferedReader(new FileReader("Recipients.csv"))) {
             String record;
             boolean skipHeader = true;
-            int tokenNumber = 1;
+            int sequence = 1;
             while ((record = fileReader.readLine()) != null) {
                 if (skipHeader) {
                     skipHeader = false;
@@ -57,14 +58,15 @@ public class DepotSystem {
                 }
                 String[] fields = record.split(",");
                 if (fields.length >= 2) {
-                    String recipientName = fields[0].trim();
+                    String name = fields[0].trim();
                     String packageId = fields[1].trim();
-                    Customer person = new Customer(recipientName, packageId, tokenNumber++);
-                    recipientQueue.enqueueRecipient(person);
+                    Customer recipient = new Customer(name, packageId, sequence++);
+                    recipientQueue.enqueueRecipient(recipient);
                 }
             }
         } catch (IOException ex) {
-            System.err.println("Recipients loading failed: " + ex.getMessage());
+            System.err.println("Error loading recipient data: " + ex.getMessage());
+            logger.logEvent("Failed to initialize recipient queue: " + ex.getMessage());
         }
     }
 
@@ -108,65 +110,111 @@ public class DepotSystem {
         System.out.print("Enter package identifier: ");
         String packageId = inputReader.nextLine();
     
+        // Check if package exists
         Parcel currentPackage = packageCollection.getPackageByID(packageId);
         if (currentPackage == null) {
-            System.out.println("Package not found in system");
-            logger.logEvent("Processing failed: Package " + packageId + " not found");
+            System.out.println("Package not found");
+            logger.logEvent("Failed to process package: " + packageId + " - not found");
             return;
         }
     
-        Queue<Customer> activeQueue = recipientQueue.getQueueContents();
-        Customer currentRecipient = null;
+        // Check if customer exists with this package
+        Queue<Customer> queue = recipientQueue.getQueueContents();
+        Customer recipientToProcess = null;
     
-        for (Customer r : activeQueue) {
-            if (r.getPackageID().equals(packageId)) {
-                currentRecipient = r;
+        for (Customer recipient : queue) {
+            if (recipient.getPackageID().equals(packageId)) {
+                recipientToProcess = recipient;
                 break;
             }
         }
     
-        if (currentRecipient == null) {
-            System.out.println("No recipient found for this package");
-            logger.logEvent("Processing failed: No recipient for package " + packageId);
+        if (recipientToProcess == null) {
+            System.out.println("No recipient found with this package ID");
+            logger.logEvent("Failed to process package: " + packageId + " - no recipient found");
             return;
         }
     
+        // Calculate the fee using the processor
         float processingCharge = processor.computeCollectionCharge(currentPackage);
-        processor.processCollection(currentRecipient, currentPackage);
     
-        // Update released items record
-        try (PrintWriter writer = new PrintWriter(new BufferedWriter(new FileWriter("released.csv", true)))) {
-            writer.println(String.format("%s,%s,%.2f,%s,%s,£%.2f",
-                currentRecipient.getSurname(), packageId,
-                currentPackage.getMassKg(), currentPackage.getMeasurementSpec(),
-                currentPackage.getDeliveryState(), processingCharge));
-        } catch (IOException ex) {
-            logger.logEvent("Failed to update delivery records: " + ex.getMessage());
+        // Process the recipient
+        processor.processCollection(recipientToProcess, currentPackage);
+    
+        // Add details to released.csv
+        try (FileWriter fw = new FileWriter("released.csv", true);
+             BufferedWriter bw = new BufferedWriter(fw);
+             PrintWriter out = new PrintWriter(bw)) {
+    
+            out.println(recipientToProcess.getSurname() + "," + recipientToProcess.getPackageID() + "," +
+                        currentPackage.getMassKg() + "," + currentPackage.getMeasurementSpec() + "," +
+                        currentPackage.getDeliveryState() + ",£" + String.format("%.2f", processingCharge));
+            System.out.println("Details added to released.csv");
+        } catch (IOException e) {
+            System.err.println("Error updating released file: " + e.getMessage());
+            logger.logEvent("Error adding release details to released.csv: " + e.getMessage());
         }
     
-        // Update system files
-        updateSystemRecords(currentRecipient, packageId);
+        updateSystemRecords(recipientToProcess, packageId);
     
+        // Remove recipient from the in-memory queue
         recipientQueue.dequeueRecipient();
     
-        System.out.printf("Processed: %s collected package %s. Charge: £%.2f%n",
-            currentRecipient.getSurname(), packageId, processingCharge);
+        System.out.println("Processed recipient: " + recipientToProcess.getSurname() + 
+                          " with package: " + packageId +
+                          ". Fee: £" + String.format("%.2f", processingCharge));
     }
 
     private void updateSystemRecords(Customer recipient, String packageId) {
         // Update Recipients file
-        updateFile("Recipients.csv", line -> {
-            String[] data = line.split(",");
-            return data.length >= 2 && 
-                   data[0].trim().equals(recipient.getSurname()) && 
-                   data[1].trim().equals(packageId);
-        });
-
+        try {
+            File inputFile = new File("Recipients.csv");
+            File tempFile = new File("Recipients_temp.csv");
+    
+            try (BufferedReader reader = new BufferedReader(new FileReader(inputFile));
+                 BufferedWriter writer = new BufferedWriter(new FileWriter(tempFile))) {
+                
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    String[] data = line.split(",");
+                    if (!(data.length >= 2 && 
+                        data[0].trim().equals(recipient.getSurname()) && 
+                        data[1].trim().equals(packageId))) {
+                        writer.write(line + System.lineSeparator());
+                    }
+                }
+            }
+    
+            inputFile.delete();
+            tempFile.renameTo(inputFile);
+            logger.logEvent("Updated recipient records for: " + recipient.getSurname());
+        } catch (IOException ex) {
+            logger.logEvent("Failed to update recipient records: " + ex.getMessage());
+        }
+    
         // Update Inventory file
-        updateFile("Inventory.csv", line -> {
-            String[] data = line.split(",");
-            return data.length >= 1 && data[0].trim().equals(packageId);
-        });
+        try {
+            File inputFile = new File("Inventory.csv");
+            File tempFile = new File("Inventory_temp.csv");
+    
+            try (BufferedReader reader = new BufferedReader(new FileReader(inputFile));
+                 BufferedWriter writer = new BufferedWriter(new FileWriter(tempFile))) {
+                
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    String[] data = line.split(",");
+                    if (!(data.length >= 1 && data[0].trim().equals(packageId))) {
+                        writer.write(line + System.lineSeparator());
+                    }
+                }
+            }
+    
+            inputFile.delete();
+            tempFile.renameTo(inputFile);
+            logger.logEvent("Updated inventory records for package: " + packageId);
+        } catch (IOException ex) {
+            logger.logEvent("Failed to update inventory records: " + ex.getMessage());
+        }
     }
 
     private void updateFile(String filename, java.util.function.Predicate<String> skipCondition) {
@@ -210,153 +258,100 @@ public class DepotSystem {
 
     private void registerNewRecipient() {
         System.out.print("Enter recipient name: ");
-        String recipientName = inputReader.nextLine();
-        System.out.print("Enter package identifier: ");
+        String name = inputReader.nextLine();
+        System.out.print("Enter package ID: ");
         String packageId = inputReader.nextLine();
-
+    
+        // Check if package exists
         if (packageCollection.getPackageByID(packageId) == null) {
-            System.out.println("Error: Package identifier not found in system.");
-            logger.logEvent("Registration failed: " + recipientName + " - Package " + packageId + " not found");
+            System.out.println("Error: Package ID does not exist.");
+            logger.logEvent("Failed to add recipient " + name + ": Package ID " + packageId + " not found");
             return;
         }
-
-        int queuePosition = recipientQueue.getQueueContents().size() + 1;
-        Customer newRecipient = new Customer(recipientName, packageId, queuePosition);
+    
+        int sequence = recipientQueue.getQueueContents().size() + 1;
+        Customer newRecipient = new Customer(name, packageId, sequence);
         recipientQueue.enqueueRecipient(newRecipient);
-
-        try (PrintWriter writer = new PrintWriter(new BufferedWriter(new FileWriter("Recipients.csv", true)))) {
-            writer.println(recipientName + "," + packageId);
-            logger.logEvent("New recipient registered: " + recipientName + " for package: " + packageId);
-        } catch (IOException ex) {
-            System.err.println("Failed to update recipient records: " + ex.getMessage());
-            logger.logEvent("Failed to register recipient in system: " + ex.getMessage());
+    
+        try (FileWriter fw = new FileWriter("Recipients.csv", true);
+             BufferedWriter bw = new BufferedWriter(fw);
+             PrintWriter out = new PrintWriter(bw)) {
+            out.println(name + "," + packageId);
+            logger.logEvent("Added new recipient: " + name + " with package ID: " + packageId);
+        } catch (IOException e) {
+            System.err.println("Error updating recipient file: " + e.getMessage());
+            logger.logEvent("Error adding recipient to file: " + e.getMessage());
         }
     }
 
     private void registerNewPackage() {
-        System.out.print("Enter package identifier: ");
-        String identifier = inputReader.nextLine();
-        System.out.print("Enter mass (kg): ");
+        System.out.print("Enter package ID: ");
+        String id = inputReader.nextLine();
+        System.out.print("Enter weight: ");
         float mass = Float.parseFloat(inputReader.nextLine());
-        System.out.print("Enter measurements (length width height): ");
-        String measurements = inputReader.nextLine();
-
-        Parcel newPackage = new Parcel(identifier, mass, measurements);
+        System.out.print("Enter dimensions (length width height): ");
+        String dimensions = inputReader.nextLine();
+    
+        Parcel newPackage = new Parcel(id, mass, dimensions);
         packageCollection.addPackage(newPackage);
-
-        try (PrintWriter writer = new PrintWriter(new BufferedWriter(new FileWriter("Inventory.csv", true)))) {
-            String[] dimensions = measurements.split(" ");
-            writer.println(identifier + "," + mass + "," + String.join(",", dimensions));
-            logger.logEvent("New package registered: " + identifier + 
-                          " (Mass: " + mass + "kg, Size: " + measurements + ")");
-        } catch (IOException ex) {
-            System.err.println("Failed to update inventory records: " + ex.getMessage());
-            logger.logEvent("Failed to register package in system: " + ex.getMessage());
+    
+        try (FileWriter fw = new FileWriter("Inventory.csv", true);
+             BufferedWriter bw = new BufferedWriter(fw);
+             PrintWriter out = new PrintWriter(bw)) {
+            String[] dims = dimensions.split(" ");
+            out.println(id + "," + mass + "," + String.join(",", dims));
+            logger.logEvent("Added new package: " + id + " with mass: " + mass + " and dimensions: " + dimensions);
+        } catch (IOException e) {
+            System.err.println("Error updating inventory file: " + e.getMessage());
+            logger.logEvent("Error adding package to file: " + e.getMessage());
         }
     }
 
     private void deregisterRecipient() {
         System.out.print("Enter recipient name to remove: ");
-        String recipientName = inputReader.nextLine();
-        System.out.print("Enter package identifier: ");
+        String name = inputReader.nextLine();
+        System.out.print("Enter package ID: ");
         String packageId = inputReader.nextLine();
-
-        Parcel associatedPackage = packageCollection.getPackageByID(packageId);
-        if (associatedPackage != null && !associatedPackage.getDeliveryState().equals("Collected")) {
-            System.out.println("Cannot remove: Package still in depot system");
-            logger.logEvent("Deregistration failed: " + recipientName + 
-                          " - Package " + packageId + " not yet collected");
+    
+        Parcel parcel = packageCollection.getPackageByID(packageId);
+        if (parcel != null && !parcel.getDeliveryState().equals("Collected")) {
+            System.out.println("Cannot remove recipient: associated package is still in depot");
+            logger.logEvent("Failed to remove recipient " + name + ": Package " + packageId + " is still in depot");
             return;
         }
-
-        boolean removalSuccess = false;
-        try {
-            File originalFile = new File("Recipients.csv");
-            File tempFile = new File("Recipients.tmp");
-
-            try (BufferedReader reader = new BufferedReader(new FileReader(originalFile));
-                 BufferedWriter writer = new BufferedWriter(new FileWriter(tempFile))) {
-
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    String[] data = line.split(",");
-                    if (data.length >= 2 && 
-                        data[0].trim().equals(recipientName) && 
-                        data[1].trim().equals(packageId)) {
-                        removalSuccess = true;
-                        continue;
-                    }
-                    writer.write(line + System.lineSeparator());
-                }
-            }
-
-            if (removalSuccess) {
-                originalFile.delete();
-                tempFile.renameTo(originalFile);
-                logger.logEvent("Recipient deregistered: " + recipientName + 
-                              " with package: " + packageId);
-            } else {
-                tempFile.delete();
-                System.out.println("Recipient not found in system");
-                logger.logEvent("Deregistration failed: Recipient " + recipientName + 
-                              " not found in records");
-            }
-        } catch (IOException ex) {
-            System.err.println("Failed to update recipient records: " + ex.getMessage());
-            logger.logEvent("Error during recipient deregistration: " + ex.getMessage());
-        }
+    
+        updateFile("Recipients.csv", line -> {
+            String[] data = line.split(",");
+            return data.length >= 2 && data[0].trim().equals(name) && data[1].trim().equals(packageId);
+        });
+        
+        logger.logEvent("Removed recipient: " + name + " with package ID: " + packageId);
     }
+    
 
     private void removePackage() {
-        System.out.print("Enter package identifier to remove: ");
-        String packageId = inputReader.nextLine();
-
-        Parcel packageToRemove = packageCollection.getPackageByID(packageId);
+        System.out.print("Enter package ID to remove: ");
+        String id = inputReader.nextLine();
+    
+        Parcel packageToRemove = packageCollection.getPackageByID(id);
         if (packageToRemove == null) {
-            System.out.println("Package not found in system");
-            logger.logEvent("Removal failed: Package " + packageId + " not found");
+            System.out.println("Package not found");
+            logger.logEvent("Failed to remove package " + id + ": not found");
             return;
         }
-
+    
         if (!packageToRemove.getDeliveryState().equals("Collected")) {
-            System.out.println("Cannot remove: Package still in depot system");
-            logger.logEvent("Removal failed: Package " + packageId + " not yet collected");
+            System.out.println("Cannot remove package: still in depot");
+            logger.logEvent("Failed to remove package " + id + ": still in depot");
             return;
         }
-
-        boolean removalSuccess = false;
-        try {
-            File originalFile = new File("Inventory.csv");
-            File tempFile = new File("Inventory.tmp");
-
-            try (BufferedReader reader = new BufferedReader(new FileReader(originalFile));
-                 BufferedWriter writer = new BufferedWriter(new FileWriter(tempFile))) {
-
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    String[] data = line.split(",");
-                    if (data.length >= 1 && data[0].trim().equals(packageId)) {
-                        removalSuccess = true;
-                        continue;
-                    }
-                    writer.write(line + System.lineSeparator());
-                }
-            }
-
-            if (removalSuccess) {
-                originalFile.delete();
-                tempFile.renameTo(originalFile);
-                logger.logEvent("Package removed from system: " + packageId);
-            } else {
-                tempFile.delete();
-                System.out.println("Package not found in inventory records");
-                logger.logEvent("Removal failed: Package " + packageId + 
-                              " not found in inventory records");
-            }
-        } catch (IOException ex) {
-            System.err.println("Failed to update inventory records: " + ex.getMessage());
-            logger.logEvent("Error during package removal: " + ex.getMessage());
-        }
+    
+        updateFile("Inventory.csv", line -> {
+            String[] data = line.split(",");
+            return data.length >= 1 && data[0].trim().equals(id);
+        });
+        
+        logger.logEvent("Removed package: " + id);
     }
 
     public static void main(String[] args) {
