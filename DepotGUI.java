@@ -3,6 +3,7 @@ import java.awt.*;
 import java.awt.event.*;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
+import java.util.Scanner;
 import java.io.OutputStream;
 import java.io.PrintStream;
 
@@ -161,9 +162,14 @@ public class DepotGUI extends JFrame {
         processButton.addActionListener(e -> {
             String parcelId = parcelIdField.getText().trim();
             if (!parcelId.isEmpty()) {
+                // Create a temporary reader for this operation
+                depotSystem.inputReader = new Scanner(parcelId);
                 depotSystem.processNextRecipient();
                 dialog.dispose();
                 updateStatus();
+                mainDisplayArea.append("Processed parcel: " + parcelId + "\n");
+            } else {
+                showError("Please enter a Parcel ID");
             }
         });
 
