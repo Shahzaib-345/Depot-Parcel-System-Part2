@@ -247,10 +247,13 @@ public class DepotGUI extends JFrame {
             String dimensions = dimensionsField.getText().trim();
             
             if (!id.isEmpty() && !dimensions.isEmpty()) {
+                // Create a temporary reader with the input values
+                String input = id + "\n" + weight + "\n" + dimensions;
+                depotSystem.inputReader = new Scanner(input);
                 depotSystem.registerNewPackage();
                 dialog.dispose();
                 updateStatus();
-                mainDisplayArea.append("Parcel added successfully: " + id + "\n");
+                mainDisplayArea.append("Added parcel: " + id + "\n");
             } else {
                 showError("Please fill all fields");
             }
