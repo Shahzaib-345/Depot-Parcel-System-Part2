@@ -300,10 +300,13 @@ public class DepotGUI extends JFrame {
             String parcelId = parcelIdField.getText().trim();
             
             if (!name.isEmpty() && !parcelId.isEmpty()) {
+                // Create a temporary reader with the input values
+                String input = name + "\n" + parcelId;
+                depotSystem.inputReader = new Scanner(input);
                 depotSystem.deregisterRecipient();
                 dialog.dispose();
                 updateStatus();
-                mainDisplayArea.append("Customer removed successfully: " + name + "\n");
+                mainDisplayArea.append("Removed customer: " + name + "\n");
             } else {
                 showError("Please fill all fields");
             }
