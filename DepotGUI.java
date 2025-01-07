@@ -4,6 +4,9 @@ import java.awt.event.*;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.Scanner;
+import java.io.BufferedReader;
+import java.io.FileReader;
+import java.io.IOException;
 import java.io.OutputStream;
 import java.io.PrintStream;
 
@@ -42,6 +45,10 @@ public class DepotGUI extends JFrame {
         statusUpdateTimer = new Timer(5000, e -> updateStatus());
         statusUpdateTimer.start();
 
+        // Add clear display timer
+        Timer clearTimer = new Timer(30000, e -> clearMainDisplay());
+        clearTimer.start();
+
         // Apply modern look and feel
         applyModernStyle();
     }
@@ -57,7 +64,7 @@ public class DepotGUI extends JFrame {
         String[] buttonLabels = {
             "Process Parcel", "View Queue", "View Inventory",
             "System Log", "Add Customer", "Add Parcel",
-            "Remove Customer", "Remove Parcel", "Exit"
+            "Remove Customer", "Remove Parcel", "View Processed", "Exit" 
         };
 
         for (String label : buttonLabels) {
@@ -144,9 +151,26 @@ public class DepotGUI extends JFrame {
             case "Remove Parcel":
                 showRemoveParcelDialog();
                 break;
+            case "View Processed":
+                displayProcessedParcels();
+                break;    
             case "Exit":
                 System.exit(0);
                 break;
+        }
+    }
+
+    private void displayProcessedParcels() {
+        mainDisplayArea.setText(""); // Clear previous content
+        mainDisplayArea.append("=== Processed Parcels ===\n\n");
+        
+        try (BufferedReader br = new BufferedReader(new FileReader("processed.csv"))) {
+            String line;
+            while ((line = br.readLine()) != null) {
+                mainDisplayArea.append(line + "\n");
+            }
+        } catch (IOException e) {
+            mainDisplayArea.append("Error loading processed parcels: " + e.getMessage() + "\n");
         }
     }
 
@@ -372,100 +396,13 @@ public class DepotGUI extends JFrame {
         dialog.setVisible(true);
     }
 
-    private void showViewQueueDialog() {
-        JDialog dialog = createStyledDialog("Customer Queue");
-        dialog.setSize(500, 400);
-        
-        JTextArea queueArea = new JTextArea();
-        queueArea.setEditable(false);
-        queueArea.setMargin(new Insets(10, 10, 10, 10));
-        queueArea.setFont(new Font("Monospaced", Font.PLAIN, 14));
-        
-        JScrollPane scrollPane = new JScrollPane(queueArea);
-        
-        // Redirect System.out to capture queue display
-        CustomOutputStream cos = new CustomOutputStream(queueArea);
-        PrintStream ps = new PrintStream(cos);
-        PrintStream old = System.out;
-        System.setOut(ps);
-        
-        depotSystem.displayRecipientList();
-        
-        // Restore original System.out
-        System.setOut(old);
-        
-        dialog.add(scrollPane);
-        dialog.setVisible(true);
-    }
-
-
-    private void showViewInventoryDialog() {
-        JDialog dialog = createStyledDialog("Inventory Status");
-        dialog.setSize(500, 400);
-        
-        JTextArea inventoryArea = new JTextArea();
-        inventoryArea.setEditable(false);
-        inventoryArea.setMargin(new Insets(10, 10, 10, 10));
-        inventoryArea.setFont(new Font("Monospaced", Font.PLAIN, 14));
-        
-        JScrollPane scrollPane = new JScrollPane(inventoryArea);
-        
-        // Redirect System.out to capture inventory display
-        CustomOutputStream cos = new CustomOutputStream(inventoryArea);
-        PrintStream ps = new PrintStream(cos);
-        PrintStream old = System.out;
-        System.setOut(ps);
-        
-        depotSystem.displayInventory();
-        
-        // Restore original System.out
-        System.setOut(old);
-        
-        dialog.add(scrollPane);
-        dialog.setVisible(true);
-    }
-
-    private void showViewLogDialog() {
-        JDialog dialog = createStyledDialog("System Log");
-        dialog.setSize(600, 400);
-        
-        JTextArea logArea = new JTextArea();
-        logArea.setEditable(false);
-        logArea.setMargin(new Insets(10, 10, 10, 10));
-        logArea.setFont(new Font("Monospaced", Font.PLAIN, 14));
-        
-        JScrollPane scrollPane = new JScrollPane(logArea);
-        
-        // Redirect System.out to capture log display
-        CustomOutputStream cos = new CustomOutputStream(logArea);
-        PrintStream ps = new PrintStream(cos);
-        PrintStream old = System.out;
-        System.setOut(ps);
-        
-        depotSystem.displayEventLog();
-        
-        // Restore original System.out
-        System.setOut(old);
-        
-        dialog.add(scrollPane);
-        dialog.setVisible(true);
-    }
-
+    
     private void showError(String message) {
         JOptionPane.showMessageDialog(
             this,
             message,
             "Error",
             JOptionPane.ERROR_MESSAGE
-        );
-    }
-
-    private void showSuccess(String message) {
-        JOptionPane.showMessageDialog(
-            this,
-            message,
-            "Success",
-            JOptionPane.INFORMATION_MESSAGE
         );
     }
 
@@ -523,6 +460,10 @@ public class DepotGUI extends JFrame {
                 sb.setLength(0);
             }
         }
+    }
+
+    private void clearMainDisplay() {
+        mainDisplayArea.setText("");
     }
 
     public static void main(String[] args) {
